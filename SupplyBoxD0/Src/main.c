@@ -332,7 +332,7 @@ static DEVICE_CONFIG defaultDeviceConfig =
 	},
 	//report condition
 	{
-		3600,//period
+		480,//period
 		0,//power delta
 		0 //temp delta
 	},
@@ -350,7 +350,7 @@ static DEVICE_CONFIG defaultDeviceConfig =
 };
 
 uint32_t last_sysc_time_second = 0;
-#define SYSC_TIME_GAP_SECOND 3600
+#define SYSC_TIME_GAP_SECOND 24*3600//单位：秒
 
 uint32_t last_rcv_policy_tick = 0;
 //uint32_t last_reset_tick = 0;
@@ -467,6 +467,7 @@ uint16_t FLASH_ReadHalfWord(uint32_t address);
 #endif 
 
 static int IS_FIRST_REPORT = true;
+static int IS_FIRST_SYSC_TIME = true;
 
 #if 1
 union float2hex{
@@ -529,7 +530,7 @@ static uint32_t network_first_unavailable_tick = 0;
 static uint8_t NBSendFailetimes = 0;
 volatile uint32_t time = 0; // ms 计时变量 
 
-#define SEND_FAILED_TIMES_TO_REREGIST 3
+#define SEND_FAILED_TIMES_TO_REREGIST 2
 
 TIM_HandleTypeDef    TimHandle;
 
@@ -902,6 +903,14 @@ void executePolicy3()
 #if 1
 void checkNBmoduleAndNetwork()
 {
+	if(NBSendFailetimes >= SEND_FAILED_TIMES_TO_REREGIST)
+	{
+		char str[] = "NBSendFailetimes reached, reregiste!!\r\n"; 
+		HAL_UART_Transmit(&huart1,(uint8_t*)str,strlen(str),500);
+		NBSendFailetimes = 0;
+		goto REREGISTE;
+	}
+	
 	uint32_t nowTick = HAL_GetTick()/1000;
 	if(nowTick - last_check_network_tick > CHECK_NETWORK_PERIOD)
 	{
@@ -974,13 +983,6 @@ void checkNBmoduleAndNetwork()
 		memset(AttRetMsg.AtCmd,0,sizeof(AttRetMsg.AtCmd));//clear array 
 		NB_ATCMD_NO_PRINT(&huart1, &huart3, &AttOpMsg,&AttRetMsg, 300);//result return not imediatly, not need to check 
 		*/
-		if(NBSendFailetimes >= SEND_FAILED_TIMES_TO_REREGIST)
-		{
-			char str[] = "NBSendFailetimes reached, reregiste!!\r\n"; 
-			HAL_UART_Transmit(&huart1,(uint8_t*)str,strlen(str),500);
-			NBSendFailetimes = 0;
-			goto REREGISTE;
-		}
 		
 		#if 0
 		if(0 == CT_PLATFORM_CONNECT_FLAG)
@@ -995,17 +997,21 @@ void checkNBmoduleAndNetwork()
 		}
 		#endif
 		return;
-		
-REREGISTE:
-		last_check_network_tick = HAL_GetTick()/1000;
-		if(0 == network_first_unavailable_tick)
-		{
-			network_first_unavailable_tick = HAL_GetTick();
-		}
-		NB_Attachment(&huart1, &huart3, 3);
-		MQTT_Init();
+	}
+	else
+	{
 		return;
 	}
+	
+REREGISTE:
+	last_check_network_tick = HAL_GetTick()/1000;
+	if(0 == network_first_unavailable_tick)
+	{
+		network_first_unavailable_tick = HAL_GetTick();
+	}
+	NB_Attachment(&huart1, &huart3, 3);
+	MQTT_Init();
+	return;
 }
 
 void NBPowerRestart()
@@ -1275,7 +1281,7 @@ void sysc_time_from_network()
 		sdate.Date = DecNum(Index[14])*10+DecNum(Index[15]);
 		sdate.WeekDay = RTC_WEEKDAY_SATURDAY;
 		
-		stime.Hours = DecNum(Index[17])*10+DecNum(Index[18]);//8 is time zone
+		stime.Hours = DecNum(Index[17])*10+DecNum(Index[18]);
 		stime.Minutes = DecNum(Index[20])*10+DecNum(Index[21]);
 		stime.Seconds = DecNum(Index[23])*10+DecNum(Index[24]);
 		
@@ -1424,7 +1430,7 @@ int query_urc_msg(UART_HandleTypeDef *NBhuart, uint8_t *msg, uint8_t times, uint
 	//const char Toolong[]="\nToo long Repond!\n";
 	//const char TimeOutString[]="\nRespond Time out!\n";
 	//volatile uint16_t NumOfChar;	
-	volatile uint16_t Cnt, tryTimes = 0;
+	volatile uint16_t Cnt, NumOfChar, tryTimes = 0;
 	uint32_t tickstart = 0U;
 	
 	memset(AttRetMsg.AtCmd,0,sizeof(AttRetMsg.AtCmd));//clear array
@@ -1432,6 +1438,7 @@ int query_urc_msg(UART_HandleTypeDef *NBhuart, uint8_t *msg, uint8_t times, uint
 	{
 		tryTimes++;
 		Cnt=0;
+		NumOfChar = 0;
 		tickstart = HAL_GetTick();
 		for(;;)
 		{
@@ -1463,13 +1470,14 @@ int query_urc_msg(UART_HandleTypeDef *NBhuart, uint8_t *msg, uint8_t times, uint
 					}
 					else
 					{
-						//NumOfChar=Cnt-1;
+						NumOfChar=Cnt-1;
 						break;
 					}//if (Cnt<2)	
 				}
 			}//if()
 		}//for(;;)
 	
+		AttRetMsg.CmdLen = NumOfChar; 
 		if(0 == NB_ACK_Check((char *)AttRetMsg.AtCmd, AttRetMsg.CmdLen, (char *)msg))
 		{
 			HAL_UART_Transmit(&huart1, AttRetMsg.AtCmd, AttRetMsg.CmdLen, 100);
@@ -1487,20 +1495,23 @@ int query_urc_msg(UART_HandleTypeDef *NBhuart, uint8_t *msg, uint8_t times, uint
 }
 
 
-//const char PUB_TOPIC_FORMAT[] = "\"device/4G/%s/up\"";
-//char pub_topic[64] = {0};
-const char ATQMTPUBEX_FORMAT[] = "AT+QMTPUBEX=0,1,1,0,\"device/4G/%s/up\",%u";
+
+const char ATQMTPUBEX_FORMAT[] = "AT+QMTPUBEX=0,1,1,0,\"device/4G/%s/up\",%u";//client,msgid,qos,retain
 int  MQTT_Init(void)
 {
-	//const char ATQMTOPEN[] = "AT+QMTOPEN=0,\"message.cloud.glxt.com\",61613";
-	const char ATQMTOPEN[] = "AT+QMTOPEN=0,\"desktop.cloud.glxt.com\",8088";
+	const char ATQMTOPEN[] = "AT+QMTOPEN=0,\"message.cloud.glxt.com\",61613";
+	//const char ATQMTOPEN[] = "AT+QMTOPEN=0,\"desktop.cloud.glxt.com\",8088";
 	const char ATQMTOPEN_QUERY[] = "AT+QMTOPEN?";
-	const char ATQMTCONN[] = "AT+QMTCONN=0,\"client\", \"admin\", \"password\"";
+	const char ATQMTCONN_FORMAT[] = "AT+QMTCONN=0,\"%s\", \"admin\", \"password\"";
 	const char ATQMTCONN_QUERY[] = "AT+QMTCONN?";
 	const char ATQMTSUB[] = "AT+QMTSUB=0,1,%s,1";
 	const char ATRCVMODE[] = "AT+QMTCFG=\"recv/mode\",0,0,1";
-	int i = 0;
 	char str[64] = {0};
+	char buf[96] = {0};
+	
+	const char C0_OPEN_RSP[] = "+QMTOPEN: 0,0";
+	const char C0_CONN_RSP[] = "+QMTCONN: 0,0,0";
+	const char C0_SUB_RSP[] = "+QMTSUB: 0,1,0,1";
 	
 	StringCpy(AttOpMsg.AtCmd,(uint8_t *)ATRCVMODE,strlen(ATRCVMODE));
 	AttOpMsg.CmdLen=strlen(ATRCVMODE);
@@ -1511,13 +1522,13 @@ int  MQTT_Init(void)
 		HAL_UART_Transmit(&huart1, (uint8_t *)str, strlen(str), 100);
 		return -1;
 	}
-    //printf("AT+QMTOPEN=0,\"iot-as-mqtt.cn-shanghai.aliyuncs.com\",1883\r\n");//通过TCP方式去连接MQTT服务器 
+	
 	StringCpy(AttOpMsg.AtCmd,(uint8_t *)ATQMTOPEN,strlen(ATQMTOPEN));
 	AttOpMsg.CmdLen=strlen(ATQMTOPEN);
 	NB_ATCMD(&huart1,&huart3,&AttOpMsg,&AttRetMsg,800);
-	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,"+QMTOPEN: 0,0"))
+	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,(char *)C0_OPEN_RSP))
 	{
-		if(0 != query_urc_msg(&huart3, (uint8_t *)"+QMTOPEN: 0,0", 20, 1000))
+		if(0 != query_urc_msg(&huart3, (uint8_t *)C0_OPEN_RSP, 20, 1000))
 		{
 			sprintf(str, "mqtt open failed!\r\n");
 			HAL_UART_Transmit(&huart1, (uint8_t *)str, strlen(str), 100);
@@ -1525,14 +1536,15 @@ int  MQTT_Init(void)
 		}
 	}
 	
-	HAL_Delay(500);
-	StringCpy(AttOpMsg.AtCmd,(uint8_t *)ATQMTCONN,strlen(ATQMTCONN));
-	AttOpMsg.CmdLen=strlen(ATQMTCONN);
+	HAL_Delay(200);
+	sprintf(buf, ATQMTCONN_FORMAT, deviceId);
+	StringCpy(AttOpMsg.AtCmd,(uint8_t *)buf,strlen(buf));
+	AttOpMsg.CmdLen=strlen(buf);
 	NB_ATCMD(&huart1,&huart3,&AttOpMsg,&AttRetMsg,500);
 	
-	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,"+QMTCONN: 0,0,0"))
+	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,(char *)C0_CONN_RSP))
 	{
-		if(0 != query_urc_msg(&huart3, (uint8_t *)"+QMTCONN: 0,0,0", 5, 1000))
+		if(0 != query_urc_msg(&huart3, (uint8_t *)C0_CONN_RSP, 5, 1000))
 		{
 			sprintf(str, "mqtt connect failed!\r\n");
 			HAL_UART_Transmit(&huart1, (uint8_t *)str, strlen(str), 100);
@@ -1540,7 +1552,7 @@ int  MQTT_Init(void)
 		}
 	}
 	
-	HAL_Delay(500);
+	HAL_Delay(200);
 	int len = strlen(deviceId);
 	if(strlen(deviceId) + sizeof(SUB_TOPIC_FORMAT) > sizeof(sub_topic))
 	{
@@ -1550,14 +1562,14 @@ int  MQTT_Init(void)
 	}
 	sprintf(sub_topic, SUB_TOPIC_FORMAT, deviceId);
 	//sprintf(pub_topic, PUB_TOPIC_FORMAT, deviceId);
-	char buf[96] = {0};
+	memset(buf, 0, sizeof(buf));
 	sprintf(buf, ATQMTSUB, sub_topic);
 	StringCpy(AttOpMsg.AtCmd,(uint8_t *)buf,strlen(buf));
 	AttOpMsg.CmdLen=strlen(buf);
 	NB_ATCMD(&huart1,&huart3,&AttOpMsg,&AttRetMsg,500);
-	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,"+QMTSUB: 0,1,0,1"))
+	if (0 != NB_ACK_Check((char *)AttRetMsg.AtCmd,AttRetMsg.CmdLen,(char *)C0_SUB_RSP))
 	{
-		if(0 != query_urc_msg(&huart3, (uint8_t *)"+QMTSUB: 0,1,0,1", 5, 1000))
+		if(0 != query_urc_msg(&huart3, (uint8_t *)C0_SUB_RSP, 5, 1000))
 		{
 			sprintf(str, "mqtt sub failed!\r\n");
 			HAL_UART_Transmit(&huart1, (uint8_t *)str, strlen(str), 100);
@@ -1571,15 +1583,12 @@ int  MQTT_Init(void)
 
 int MQTT_publish(uint8_t *hexData, uint16_t len)
 {
-	//const char ATQMTPUBEX[] = "AT+QMTPUBEX=0,1,1,0,\"device/4G/up\",";//client,msgid,qos,retain
-	//uint8_t atPubBuf[96] = {0};
 	uint8_t buf[256] = {0};
 	
 	if(NULL == hexData || len*2 > 256)
 	{
 		return -1; 
 	}
-	//sprintf((char *)atPubBuf, ATQMTPUBEX_FORMAT, deviceId);
 	sprintf((char *)buf,ATQMTPUBEX_FORMAT, deviceId, len*2);
 	uint16_t msgLen = strlen((char *)buf);
 	memset(AttOpMsg.AtCmd, 0, sizeof(AttOpMsg.AtCmd));
@@ -1712,6 +1721,8 @@ int main(void)
 		executePolicy3();
 		checkNBmoduleAndNetwork();
 		sysc_time();
+		//如果长时间无法注册到电信平台，重启系统
+		system_reset();
 		
 		/*-------------------------Moniter USART3(NB)--------------------------*/
 		memset(NBMsg.AtCmd,0,sizeof(NBMsg.AtCmd));//clear array 
@@ -3763,7 +3774,11 @@ uint8_t NB_Attachment(UART_HandleTypeDef *DBGhuart,UART_HandleTypeDef *NBhuart, 
 				break;
 		#endif
 			case GETTIME:
-				sysc_time_from_network();
+				if(true == IS_FIRST_SYSC_TIME)
+				{
+					IS_FIRST_SYSC_TIME = false;
+					sysc_time_from_network();
+				}
 				ATStatus=ENDATT;
 				break;
 			case ENDATT:	
