@@ -1411,7 +1411,7 @@ void SoftReset(void)
     NVIC_SystemReset(); 
 }
 
-#define SYSTEM_RESET_TICK_GAP (2*60*60*1000)
+#define SYSTEM_RESET_TICK_GAP (30*60*1000)//30∑÷÷”
 void system_reset(void)
 {
 	uint32_t nowTick = HAL_GetTick();
