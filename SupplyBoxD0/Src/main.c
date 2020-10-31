@@ -3668,11 +3668,12 @@ uint8_t NB_Attachment(UART_HandleTypeDef *DBGhuart,UART_HandleTypeDef *NBhuart, 
 					  ATStatus=CREG;
 						break;
 					}
-					else
-					{
-						ATStatus = START;
-					}
 					HAL_Delay(2000);
+				}
+				
+				if(CREG != ATStatus)
+				{
+					ATStatus = START;
 				}
 				break;
 #if 0
@@ -3705,13 +3706,13 @@ uint8_t NB_Attachment(UART_HandleTypeDef *DBGhuart,UART_HandleTypeDef *NBhuart, 
 					  ATStatus=CGREG;
 						break;
 					}
-					else
-					{
-						ATStatus = START;
-					}
 					HAL_Delay(1000);
 				}
 				
+				if(3 == i)
+				{
+					ATStatus=START;
+				}
 				break;
 			case CGREG:
 				StringCpy(AttOpMsg.AtCmd,(uint8_t *)ATCGREG,strlen(ATCGREG));//EPS Network Registration Status
@@ -3726,11 +3727,12 @@ uint8_t NB_Attachment(UART_HandleTypeDef *DBGhuart,UART_HandleTypeDef *NBhuart, 
 					  ATStatus=CGATT;
 						break;
 					}
-					else
-					{
-						ATStatus = START;
-					}
 					HAL_Delay(1000);
+				}
+				
+				if(3 == i)
+				{
+					ATStatus=START;
 				}
 				break;
 			case CGATT:
@@ -3745,11 +3747,11 @@ uint8_t NB_Attachment(UART_HandleTypeDef *DBGhuart,UART_HandleTypeDef *NBhuart, 
 					  ATStatus=GETIMEI;
 						break;
 					}
-					else
-					{
-						ATStatus = START;
-					}
 					HAL_Delay(1000);
+				}
+				if(3 == i)
+				{
+					ATStatus=START;
 				}
 				break;
 			case GETIMEI:
